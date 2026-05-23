@@ -25,6 +25,21 @@ jobs:
           toolchain: "1.90.0"
           targets: x86_64-unknown-linux-musl
 
+      - name: Install Security & Supply Chain Tools
+        # Using cargo install to fetch the auditing and SBOM generation tools
+        run: |
+          cargo install cargo-audit
+          cargo install cargo-cyclonedx
+
+      - name: Run Cargo Audit (CVE Check)
+        # Scans Cargo.lock for vulnerabilities. 
+        # Automatically respects ignores/overrides defined in .cargo/audit.toml.
+        run: cargo audit
+
+      - name: Generate CycloneDX SBOM
+        # Generates a JSON-formatted CycloneDX SBOM mapping all dependencies
+        run: cargo cyclonedx --format json --all-features --output-filename secure_radsec_sbom.json
+
       - name: Build Release
         run: cargo build --release --target x86_64-unknown-linux-musl
         env:
@@ -37,5 +52,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-musl-static-binary
-          path: target/x86_64-unknown-linux-musl/release/secure_radsec
+          name: linux-musl-static-release-bundle
+          path: |
+            target/x86_64-unknown-linux-musl/release/secure_radsec
+            secure_radsec_sbom.json
