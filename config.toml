@@ -1,0 +1,8 @@
+[server]
+bind_address = "0.0.0.0:2083"
+max_connections_per_sec = 100
+
+[tls]
+client_ca_path = "/etc/radsec/client_ca.pem"
+server_cert_path = "/etc/radsec/server.pem"
+private_key_path = "/etc/radsec/server.key"
