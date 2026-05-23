@@ -1,0 +1,15 @@
+# Enforce target-specific compilation overrides for the 64-bit Linux musl target
+[target.x86_64-unknown-linux-musl]
+# -C target-feature=+crt-static: Commands the compiler to link the C runtime statically.
+# -C link-arg=-static: Forcibly passes the static flag directly to the underlying linker,
+#                      ensuring any C-dependencies wrapped by crates (such as aws-lc) are 
+#                      baked purely into the binary without pulling dynamic .so linkages.
+rustflags = [
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=-static"
+]
+
+[build]
+# Standardizes the build environment to target 64-bit Linux with musl libc by default,
+# eliminating unintentional local host architecture compilation leaks during CI/CD.
+target = "x86_64-unknown-linux-musl"
