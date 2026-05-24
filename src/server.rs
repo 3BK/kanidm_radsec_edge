@@ -1,12 +1,13 @@
 use crate::config::ServerConfig;
 use governor::{Quota, RateLimiter};
-//use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
+// Import the RADIUS server components
+use radius_server::server::RadiusServer;
 
 pub async fn run(cfg: ServerConfig, tls_config: rustls::ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(&cfg.bind_address).await?;
@@ -26,7 +27,6 @@ pub async fn run(cfg: ServerConfig, tls_config: rustls::ServerConfig) -> Result<
     // Graceful Shutdown Channel
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-    // Spawn signal handler
     tokio::spawn(async move {
         signal::ctrl_c().await.expect("Failed to listen for ctrl_c");
         info!(action = "shutdown_signal", "Received termination signal, shutting down gracefully...");
@@ -54,14 +54,21 @@ pub async fn run(cfg: ServerConfig, tls_config: rustls::ServerConfig) -> Result<
 
                         tokio::spawn(async move {
                             match tls_acceptor.accept(stream).await {
-                                Ok(_tls_stream) => {
+                                Ok(tls_stream) => {
                                     info!(
                                         action = "tls_handshake",
                                         source_ip = %ip,
                                         status = "success",
                                         "mTLS session established (P-384/PQ)"
                                     );
-                                    // RADIUS Protocol processing goes here
+
+                                    // INTEGRATION: Pass the established TLS stream to the RadiusServer handler.
+                                    // Depending on your specific version of radius-server, you may need 
+                                    // to wrap this in an async closure or handler implementation.
+                                    match RadiusServer::handle(tls_stream).await {
+                                        Ok(_) => info!(action = "radius_session", source_ip = %ip, status = "closed"),
+                                        Err(e) => error!(action = "radius_session", source_ip = %ip, status = "error", error = %e),
+                                    }
                                 }
                                 Err(e) => {
                                     error!(
