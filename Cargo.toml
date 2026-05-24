@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+#https://crates.io/crates/radius-server
+radius-server = ">=0.2.3"
+
 # Async runtime & High-Performance Networking
 tokio = { version = "1.36", features = ["full"] }
 
