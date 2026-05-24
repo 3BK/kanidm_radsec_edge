@@ -1,5 +1,5 @@
 use radsec_server::{config, crypto, server};
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,10 +11,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(Level::INFO)
         .init();
 
-    info!(action = "server_start", status = "initializing", "Starting Production Secure RadSec Server");
+    info!(
+        action = "server_start",
+        status = "initializing",
+        "Starting Production Secure RadSec Server"
+    );
 
     // 2. Load TOML Configuration
-    let config_path = std::env::var("RADSEC_CONFIG").unwrap_or_else(|_| "/etc/radsec/config.toml".to_string());
+    let config_path =
+        std::env::var("RADSEC_CONFIG").unwrap_or_else(|_| "/etc/radsec/config.toml".to_string());
     let cfg = config::load_config(&config_path)?;
 
     // 3. Verify Local File Permissions (STIG / PCI DSS Constraint)
