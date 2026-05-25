@@ -2,6 +2,7 @@ use crate::config::ServerConfig;
 use governor::{Quota, RateLimiter};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration; // Added for maintenance task
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -24,6 +25,18 @@ pub async fn run(
     let quota = Quota::per_second(NonZeroU32::new(cfg.max_connections_per_sec).unwrap());
     let rate_limiter = Arc::new(RateLimiter::keyed(quota));
 
+    // CRITICAL: Memory Maintenance Task
+    // Without this, the RateLimiter will grow indefinitely in memory.
+    let limiter_clone = rate_limiter.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            limiter_clone.retain_recent();
+            debug!("Rate limiter memory swept");
+        }
+    });
+
     info!(
         action = "network_bind",
         address = %cfg.bind_address,
@@ -31,7 +44,7 @@ pub async fn run(
         "Listening for RadSec connections"
     );
 
-    // CORRECTED: Using the exact method names for `radius-server` 0.2.3
+    // Load dictionary
     let dictionary = Dictionary::load_from_file("./dictionary")
         .unwrap_or_else(|_| Dictionary::parse_from_str("").unwrap());
     let dictionary = Arc::new(dictionary);
@@ -160,10 +173,6 @@ async fn process_radius_packet(
     _dictionary: &Dictionary,
 ) -> Result<Vec<u8>, std::io::Error> {
     // INTEGRATION POINT:
-    // Now that the TLS framing and stream parsing is strictly handling RFC 6614 boundaries,
-    // you will route the raw `_request_bytes` into the crate's RADIUS logic.
-    //
-    // Returning an empty vector as a placeholder to guarantee successful compilation
-    // until the handler is fully hooked up.
+    // Routing logic here
     Ok(vec![])
 }
