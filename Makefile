@@ -1,8 +1,8 @@
 # Variables
 TARGET = x86_64-unknown-linux-musl
 RUST_VERSION = 1.90.0
-BINARY_NAME = radsec_server
-SBOM_NAME = radius_server_sbom
+BINARY_NAME = kanidm_radsec_edge
+SBOM_NAME = kanidm_radsec_edge_sbom
 BUNDLE_DIR = linux-musl-static-release-bundle
 
 # Environment variables for the build step
