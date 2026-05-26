@@ -1,66 +1,627 @@
-# radsec_server
+# kanidm_radsec_edge
 
-A high-performance, hardened RADIUS-over-TLS (RadSec) server built in Rust. Designed for zero-trust environments, it attempts to eliminate external dependencies for secret management while aligning with the aspirations of NIST SP 800-53, PCI DSS 4.0, NIST STIG, CIS, and ISO 27001.
+A hardened, production-oriented **RADIUS-over-TLS (RadSec) edge service** built in Rust for **EAP-TLS-only** environments and intended to front a **Kanidm-native RADIUS / EAP-TLS backend**.
+
+This project is designed for **zero-trust**, **high-assurance**, and **regulated** environments where secure transport, strict protocol enforcement, bounded observability, and deterministic operational behavior are required.
+
+> **Important compliance note**
+>
+> This software is **not** a certification, attestation, or guarantee of compliance.  
+> It is designed to help support **NIST SP 800-53 Rev. 5**, **PCI DSS 4.0**, **NIST STIG**, **CIS**, and **ISO 27001** readiness by providing security-oriented technical controls, implementation patterns, and deployment hooks.
+>
+> Actual compliance depends on:
+>
+> - deployment architecture,
+> - certificate/PKI governance,
+> - logging and retention,
+> - access control,
+> - vulnerability management,
+> - change management,
+> - operating system hardening,
+> - container/orchestrator hardening,
+> - and operational procedures.
+
+---
+
+## Overview
+
+`kanidm_radsec_edge` is a **Kanidm-aware RadSec edge** that:
+
+- terminates **outer RadSec TLS** sessions,
+- enforces **mutual TLS** for RadSec peers,
+- accepts and validates **RADIUS Access-Request** traffic,
+- enforces **EAP-TLS-only** policy at the edge,
+- transparently proxies valid requests to a **Kanidm RADIUS backend**,
+- relays **Access-Challenge**, **Access-Accept**, and **Access-Reject** responses,
+- and emits bounded internal **control-plane**, **NDT**, and **metrology** events.
+
+This service is intentionally **not** a full identity provider and **not** a general-purpose NAC platform. It is a **secure transport, protocol enforcement, and observability layer** for a **Kanidm-backed RadSec deployment**.
+
+---
 
 ## Security Architecture
 
-* **Post-Quantum mTLS:** Enforces mutual TLS 1.3 with a FIPS-compliant cryptographic boundary (`aws-lc-rs`), mandating ECDHE with P-384 paired with hybrid Post-Quantum key exchanges.
-* **Local Secret Protection:** Eliminates cloud-api attack vectors by reading keys from local volumes while actively enforcing POSIX permission checks (0600/0400) at runtime.
-* **Volumetric DoS Defense:** Utilizes an in-memory token-bucket governor keyed by IP address to drop abusive connections before expensive cryptographic handshakes occur.
-* **Zero-Surface Containerization:** Statically compiled using `musl` with stripped symbols, producing a minimal, immutable runtime.
-* **Structured Audit Logging:** Outputs strict JSONL telemetry to stdout for tamper-resistant ingestion by SIEM tools.
+### 1. TLS 1.3 mutual authentication
 
-## Project Structure
+The service enforces **TLS 1.3** and requires **client certificates** from incoming RadSec peers. This provides a strong outer transport boundary for RADIUS over TLS in line with RFC 6614 deployment patterns.
 
-* **`Makefile`**: Primary build, audit, and packaging orchestrator.
-* **`Cargo.toml`**: Minimal-dependency definition with an optimized, stripped, and aborted-panic release profile.
-* **`.cargo/config.toml`**: Target configuration forcing static C-runtime linkage.
-* **`config.toml`**: Human-readable server configuration.
-* **`src/main.rs`**: Application initialization, structured logging, and orchestrator.
-* **`src/config.rs`**: Validates TOML ingestion and enforces OS-level private key permissions.
-* **`src/crypto.rs`**: Configures FIPS/PQ cryptography, ALPN validation, and mTLS.
-* **`src/server.rs`**: High-throughput async connection loop with governor rate-limiting and graceful shutdown.
+### 2. Strict peer certificate policy
+
+In addition to standard chain validation, the edge can enforce stricter peer policy constraints such as:
+
+- SHA-256 fingerprint pinning,
+- SAN URI prefix matching,
+- SAN DNS suffix matching,
+- optional CN fallback control.
+
+This helps reduce implicit trust in CA-only validation and supports tighter peer identity governance.
+
+### 3. EAP-TLS-only enforcement
+
+The edge is designed for **EAP-TLS-only** environments and fail-closes on:
+
+- non-EAP requests,
+- unsupported EAP methods,
+- EAP NAK downgrades,
+- malformed EAP structures,
+- malformed or policy-violating packets.
+
+This removes unnecessary legacy authentication paths such as PEAP, TTLS, PAP, CHAP, and MSCHAPv2 from the edge service.
+
+### 4. Local secret and key protection
+
+The server reads key material from local volumes and verifies that the private key file is restricted to secure POSIX permissions (for example `0400` or `0600`) at startup.
+
+### 5. Volumetric abuse resistance
+
+Incoming connections are subject to a bounded per-source-IP rate limiter to reduce exposure to abusive or excessive connection rates before the service expends unnecessary compute on protocol handling.
+
+### 6. Safe internal control plane
+
+The service includes an internal, bounded **control-plane message queue** and an explicit **session state machine**. These are used for:
+
+- state transition visibility,
+- safe non-destructive testing (NDT),
+- protocol shadow validation,
+- internal metrology,
+- and operational diagnostics.
+
+### 7. Safe non-destructive testing (NDT)
+
+NDT is implemented using **shadow validation** only:
+
+- mirrored packets are evaluated on an internal bounded queue,
+- packet parse / authenticator / policy checks are repeated,
+- verdicts are recorded internally,
+- and the live forwarding path is not modified by shadow processing.
+
+This allows regression-oriented testing and protocol verification without introducing an external administrative test interface.
+
+### 8. Bounded metrology
+
+The service emits low-cardinality, bounded internal metrology samples covering transport, protocol, queue behavior, reject classes, and upstream timing. Metrics are aggregated to structured logs rather than exposing a separate metrics service in this revision.
+
+### 9. Minimal runtime posture
+
+The intended production deployment uses:
+
+- static musl build,
+- stripped release binary,
+- non-root execution,
+- immutable runtime image,
+- read-only mounted configuration and certificates,
+- and a read-only root filesystem where possible.
+
+---
+
+## Kanidm Alignment
+
+This project is intended to front a **Kanidm-native RADIUS / EAP-TLS backend**.
+
+The architectural separation of duties is:
+
+### `kanidm_radsec_edge`
+- secure RadSec transport termination,
+- peer trust enforcement,
+- packet validation,
+- EAP-TLS-only enforcement,
+- safe NDT,
+- edge metrology,
+- transparent proxy behavior.
+
+### Kanidm
+- authoritative RADIUS backend,
+- authoritative EAP-TLS handling,
+- identity authority,
+- directory and authorization source,
+- credential and certificate-policy authority.
+
+This division helps keep the edge service focused on **transport, enforcement, and observability** while allowing Kanidm to remain the **identity and EAP authority**.
+
+---
+
+## Compliance Readiness Positioning
+
+This implementation is designed to help support technical control objectives commonly associated with:
+
+- **NIST SP 800-53 Rev. 5**
+- **PCI DSS 4.0**
+- **NIST STIG**
+- **CIS Benchmarks / CIS Controls**
+- **ISO 27001**
+
+### Examples of control-supporting capabilities
+
+#### Audit and accountability support
+- structured JSON log output,
+- deterministic internal event generation,
+- explicit reject reasons,
+- protocol and transport telemetry,
+- state-transition visibility.
+
+#### System and communications protection support
+- TLS 1.3 transport security,
+- mutual certificate authentication,
+- peer certificate policy checks,
+- fail-closed protocol enforcement.
+
+#### Boundary protection and denial-of-service resistance support
+- bounded rate limiting,
+- packet length and attribute validation,
+- bounded internal queues,
+- timeouts on handshake and I/O paths.
+
+#### Secure configuration and hardening support
+- local TOML configuration,
+- restricted private-key permission checks,
+- minimal runtime image posture,
+- non-root execution,
+- support for immutable deployment patterns.
+
+#### Change, testing, and monitoring support
+- non-destructive shadow validation,
+- explicit state machine,
+- metrology snapshots,
+- regression-oriented malformed corpus testing.
+
+> **Important**
+>
+> Compliance frameworks require organizational, administrative, and infrastructure controls beyond the application itself.  
+> This project is best understood as a **security-focused technical component** that can contribute to those control objectives when deployed appropriately.
+
+---
+
+## Project Scope
+
+### In scope
+- RadSec transport handling
+- strict peer TLS policy
+- RADIUS packet framing and validation
+- EAP-TLS-only policy enforcement
+- transparent proxying to Kanidm
+- bounded internal control plane
+- bounded internal NDT
+- bounded internal metrology
+- structured JSON logs
+- hardened runtime posture
+
+### Explicitly out of scope
+- full identity provider behavior
+- certificate issuance / enrollment
+- full NAC / policy engine
+- packet re-signing for split-secret topologies
+- external admin API
+- external test control API
+- external metrics endpoint in this revision
+- direct claims of framework certification/compliance
+
+---
+
+## Repository Structure
+
+```text
+.
+├── Cargo.toml
+├── config.toml
+├── src
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── config.rs
+│   ├── crypto.rs
+│   ├── eap.rs
+│   ├── kanidm.rs
+│   ├── radius.rs
+│   ├── control.rs
+│   ├── metrics.rs
+│   ├── state.rs
+│   └── server.rs
+└── tests
+    ├── test.rs
+    ├── integration_proxy.rs
+    └── fuzz_regressions.rs
+```
+
+### File responsibilities
+
+- `src/main.rs`  
+  Application bootstrap, logging initialization, config load, TLS build, startup orchestration.
+
+- `src/config.rs`  
+  Configuration model, TOML load, private-key permission checks.
+
+- `src/crypto.rs`  
+  TLS 1.3 / mTLS configuration and peer certificate policy support.
+
+- `src/radius.rs`  
+  RADIUS packet structure, parse/serialize logic, `Message-Authenticator` verification, reject builder.
+
+- `src/eap.rs`  
+  EAP parsing and EAP-TLS-only enforcement helpers.
+
+- `src/kanidm.rs`  
+  Transparent upstream UDP RADIUS exchange to Kanidm.
+
+- `src/control.rs`  
+  Internal control-plane event and shadow-validation types.
+
+- `src/state.rs`  
+  Explicit session state machine and transition validation.
+
+- `src/metrics.rs`  
+  Bounded metrology samples and periodic aggregation.
+
+- `src/server.rs`  
+  Listener, rate limiting, TLS accept, packet loop, validation, upstream proxy path.
+
+---
 
 ## Quick Start
 
 ### Prerequisites
-* Rust 1.90.0+
-* `musl-tools`, `clang`, `llvm`, `nasm` (for static compilation)
-* `cargo-audit` and `cargo-cyclonedx` (installed via `make setup`)
 
-### Build & Test Workflow
-We use a `Makefile` to ensure reproducible, secure builds:
+- Rust `1.90.0+`
+- `musl-tools`
+- `clang`
+- `llvm`
+- `cmake`
+- `cargo`
 
-1.  **Initialize Environment:**
-    ```bash
-    make setup
-    ```
-2.  **Run Security Audits & Tests:**
-    ```bash
-    make audit
-    cargo test
-    ```
-3.  **Build Static Release & Generate SBOM:**
-    ```bash
-    make
-    ```
-    *This generates the binary and SBOM inside `./linux-musl-static-release-bundle/`.*
+Optional for containerized static builds:
+- Docker / Podman with BuildKit support
 
-### Configuration
-The server looks for a configuration file at `/etc/radsec/config.toml` by default. You can override this path using the environment variable:
+### Build
 
 ```bash
-export RADSEC_CONFIG=/path/to/your/custom_config.toml
-./linux-musl-static-release-bundle/radsec_server
+cargo build --release
 ```
 
-## Security Compliance Targets
-This implementation is designed to support the following regulatory controls:
+### Run tests
 
-* NIST AU-2: Audit event generation via structured JSONL logs.
+```bash
+cargo test --tests -- --nocapture
+```
 
-* PCI DSS Req 10: Tamper-evident logging and auditable system access.
+### Run locally
 
-* NIST SC-5: Denial of Service protection via keyed rate-limiting.
+```bash
+export RADSEC_CONFIG=/etc/radsec/config.toml
+cargo run --release
+```
 
-* STIG / CIS: Minimal attack surface via static linking and strict file permission validation on secrets.
+---
+
+## Configuration
+
+The service reads:
+
+```text
+/etc/radsec/config.toml
+```
+
+by default, or the path set in:
+
+```text
+RADSEC_CONFIG
+```
+
+### Example `config.toml`
+
+```toml
+[server]
+bind_address = "0.0.0.0:2083"
+max_connections_per_sec = 100
+handshake_timeout_secs = 10
+io_timeout_secs = 30
+shutdown_grace_secs = 10
+
+[tls]
+client_ca_path = "/etc/radsec/client_ca.pem"
+server_cert_path = "/etc/radsec/server.pem"
+private_key_path = "/etc/radsec/server.key"
+require_alpn_radius = false
+
+[peer_policy]
+allowed_sha256_fingerprints = []
+require_san_uri_prefix = null
+require_san_dns_suffix = null
+allow_subject_cn_fallback = false
+
+[radius]
+shared_secret = "radsec"
+require_message_authenticator = true
+max_packet_size = 4096
+
+[upstream]
+address = "10.0.0.15:1812"
+timeout_secs = 5
+
+[eap]
+enforce_eap_tls_only = true
+
+[control_plane]
+enabled = true
+queue_capacity = 4096
+shadow_queue_capacity = 2048
+shadow_mode = true
+allow_fault_injection = false
+queue_drop_log_interval_secs = 60
+
+[metrology]
+enabled = true
+queue_capacity = 8192
+flush_interval_secs = 30
+```
+
+---
+
+## Configuration Guidance
+
+### `[server]`
+Controls listener behavior, rate limiting, and timeout posture.
+
+### `[tls]`
+Provides the server certificate, private key, and trusted client-CA bundle for incoming RadSec peers.
+
+### `[peer_policy]`
+Adds stricter peer identity constraints beyond certificate chain validation.
+
+### `[radius]`
+Controls shared-secret expectations and `Message-Authenticator` enforcement.
+
+### `[upstream]`
+Defines the Kanidm RADIUS backend socket and response timeout.
+
+### `[eap]`
+Enables strict **EAP-TLS-only** behavior.
+
+### `[control_plane]`
+Enables the secure internal control plane and shadow validation behavior.
+
+### `[metrology]`
+Enables bounded edge metrology and periodic aggregation to structured logs.
+
+---
+
+## Transparent Proxy Requirement
+
+This service validates and relays RADIUS packets transparently. As a result:
+
+> **The upstream Kanidm RADIUS backend must use the same shared secret as the edge**  
+> unless the implementation is extended to rewrite request/response authenticators.
+
+Default shared secret:
+
+```text
+radsec
+```
+
+---
+
+## Key and File Permissions
+
+Recommended runtime file ownership and permissions:
+
+```text
+/etc/radsec/config.toml      0444 or 0400
+/etc/radsec/server.pem       0444
+/etc/radsec/client_ca.pem    0444
+/etc/radsec/server.key       0400 or 0600
+```
+
+The service enforces secure private-key permissions at startup and fails closed if they are too permissive.
+
+---
+
+## Logging
+
+The service emits structured **JSON** logs to stdout.
+
+Typical event classes include:
+
+- server startup and shutdown,
+- TLS handshake success/failure,
+- peer identity observations,
+- packet framing and validation,
+- reject reasons,
+- internal control-plane events,
+- metrology flush snapshots.
+
+These logs are intended for ingestion by centralized logging/SIEM systems.
+
+---
+
+## Control Plane, NDT, and Metrology
+
+### Internal control plane
+
+The internal control plane carries bounded events such as:
+
+- session opened,
+- peer identity observed,
+- state transition,
+- RADIUS packet observed,
+- EAP packet observed,
+- reject reason,
+- shadow verdict,
+- session closed.
+
+### Explicit state machine
+
+The service uses an explicit session state machine with states such as:
+
+- `AcceptedTcp`
+- `TlsHandshakeStarted`
+- `TlsEstablished`
+- `PeerIdentityValidated`
+- `RadiusFrameReceived`
+- `RadiusValidated`
+- `EapIdentityObserved`
+- `EapTlsObserved`
+- `UpstreamPending`
+- `UpstreamChallengeRelayed`
+- `UpstreamAcceptRelayed`
+- `UpstreamRejectRelayed`
+- `Closed`
+- `Error`
+
+Illegal state transitions are treated as security-relevant anomalies and counted in metrology.
+
+### NDT (non-destructive testing)
+
+NDT uses:
+
+- bounded internal shadow queues,
+- mirrored packet validation,
+- no external replay endpoint,
+- no external fault-injection endpoint,
+- no mutation of the live forwarding path.
+
+### Metrology
+
+Current metrology categories include:
+
+- sessions opened / closed,
+- packet counts and byte counts,
+- TLS handshake count and average latency,
+- upstream request count and average RTT,
+- reject categories,
+- queue-drop counters,
+- state-violation counters.
+
+---
+
+## Tests
+
+### `tests/test.rs`
+Covers:
+- config parsing,
+- private-key permission validation,
+- RADIUS parse/serialize logic,
+- `Message-Authenticator` verification,
+- EAP-TLS-only enforcement,
+- peer certificate policy checks,
+- session state tracking,
+- shadow-validation behavior.
+
+### `tests/integration_proxy.rs`
+Covers:
+- end-to-end upstream proxy behavior,
+- Access-Challenge relay,
+- Access-Accept relay,
+- Access-Reject relay,
+- upstream timeout handling.
+
+### `tests/fuzz_regressions.rs`
+Covers:
+- malformed RADIUS packet corpus,
+- malformed EAP corpus,
+- parser non-panic guarantees,
+- shadow-path malformed-corpus regression behavior,
+- valid baseline anchor case.
+
+---
+
+## Production Container Guidance
+
+Use a minimal static runtime with:
+
+- non-root execution,
+- read-only root filesystem,
+- no added capabilities,
+- no-new-privileges,
+- read-only certificate/config mounts.
+
+### Example runtime posture
+
+```bash
+docker run -d \
+  --name radsec-edge \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  -p 2083:2083/tcp \
+  -v /opt/radsec/config:/etc/radsec:ro \
+  radsec-server:prod
+```
+
+---
+
+## Operational Recommendations
+
+For high-assurance deployment, pair this service with:
+
+- strong internal PKI governance,
+- certificate lifecycle management,
+- centralized log retention and review,
+- OS and container hardening baselines,
+- image signing / provenance controls,
+- SBOM generation and dependency scanning,
+- vulnerability management,
+- infrastructure-level monitoring,
+- change-management and deployment review processes.
+
+---
+
+## Limitations
+
+Current revision limitations:
+
+- no CRL / OCSP revocation enforcement,
+- no external metrics endpoint,
+- no dynamic upstream pool or active failover set,
+- no packet re-signing for split-secret proxy topologies,
+- no certificate issuance or enrollment workflow,
+- no externally accessible NDT control interface,
+- no claim of framework certification or formal compliance.
+
+---
+
+## Recommended Next Improvements
+
+Potential future enhancements:
+
+- CRL / OCSP enforcement,
+- upstream health checks and pool support,
+- optional packet re-signing for split-secret topologies,
+- signed regression corpus handling,
+- Prometheus/OpenTelemetry export,
+- richer audit event IDs,
+- hardened deployment examples for Kubernetes / OpenShift,
+- compliance-annotated control mapping documentation.
+
+---
+
+## Summary
+
+`kanidm_radsec_edge` is a **secure, bounded, EAP-TLS-only Kanidm-aware RadSec edge** intended for **high-assurance** and **regulated** environments.
+
+It is designed to help support:
+
+- secure transport,
+- strict protocol boundaries,
+- safe non-destructive testing,
+- bounded edge metrology,
+- and readiness-oriented control objectives for common regulatory and hardening frameworks.
+
+For identity authority and EAP-TLS backend behavior, pair it with **Kanidm**.  
+For transport security, enforcement, and observability at the RadSec boundary, use **`kanidm_radsec_edge`**.
